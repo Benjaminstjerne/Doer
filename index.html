@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lydreaktiv TV-sne</title>
+    <title>Kaotisk TV-sne med Lydreaktion</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: black; }
         canvas { display: block; }
@@ -14,8 +14,8 @@
     <script>
         let scene, camera, renderer, particles;
         let audioContext, analyser;
-        const particleCount = 100000;
-        let audioData;
+        const particleCount = 200000;
+        let audioData, time = 0;
 
         function init() {
             scene = new THREE.Scene();
@@ -24,52 +24,67 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            // Partikelsystem
             const geometry = new THREE.BufferGeometry();
             const positions = new Float32Array(particleCount * 3);
-            const colors = new Float32Array(particleCount * 3);
+            const randomness = new Float32Array(particleCount);
 
             for (let i = 0; i < particleCount * 3; i += 3) {
                 positions[i] = (Math.random() - 0.5) * 4;
                 positions[i + 1] = (Math.random() - 0.5) * 4;
                 positions[i + 2] = (Math.random() - 0.5) * 4;
-
-                colors[i] = colors[i + 1] = colors[i + 2] = Math.random();
+                randomness[i / 3] = Math.random();
             }
 
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geometry.setAttribute('randomness', new THREE.BufferAttribute(randomness, 1));
 
             const material = new THREE.ShaderMaterial({
                 uniforms: {
                     audioData: { value: null },
-                    time: { value: 0 }
+                    time: { value: 0 },
+                    baseMovement: { value: 0.005 }, // Basis bevægelse uden lyd
+                    audioInfluence: { value: 0.02 }  // Ekstra bevægelse med lyd
                 },
                 vertexShader: `
                     uniform float time;
                     uniform sampler2D audioData;
-                    attribute vec3 color;
-                    varying vec3 vColor;
+                    uniform float baseMovement;
+                    uniform float audioInfluence;
+                    attribute float randomness;
+                    varying float vIntensity;
+
+                    // Simpel støjfunktion
+                    float noise(vec3 p) {
+                        return fract(sin(dot(p, vec3(12.9898, 78.233, 45.5432))) * 43758.5453);
+                    }
 
                     void main() {
-                        vColor = color;
-                        vec3 newPosition = position;
-                        
                         float audioValue = texture2D(audioData, vec2(abs(position.x) * 0.25, 0.5)).r;
-                        newPosition.y += sin(time * 10.0 + position.x * 10.0) * 0.02 * audioValue;
-                        newPosition.x += cos(time * 8.0 + position.y * 10.0) * 0.02 * audioValue;
+                        
+                        // Basis kaotisk bevægelse
+                        vec3 newPosition = position;
+                        float noiseValue = noise(position * 2.0 + time);
+                        newPosition += vec3(
+                            sin(time * (5.0 + randomness * 5.0) + position.x * 10.0),
+                            cos(time * (3.0 + randomness * 3.0) + position.y * 8.0),
+                            sin(time * (4.0 + randomness * 4.0) + position.z * 9.0)
+                        ) * (baseMovement + audioValue * audioInfluence);
+
+                        // Wrap-around effekt
+                        newPosition = fract(newPosition + 0.5) - 0.5;
+                        newPosition *= 4.0;  // Skaler tilbage til original størrelse
 
                         vec4 mvPosition = modelViewMatrix * vec4(newPosition, 1.0);
-                        gl_PointSize = 2.0 * (1.0 + audioValue * 3.0);
+                        gl_PointSize = 1.5 * (1.0 + audioValue * 2.0 + noiseValue);
                         gl_Position = projectionMatrix * mvPosition;
+
+                        vIntensity = 0.3 + audioValue * 0.7 + noiseValue * 0.3;  // Basis intensitet + lyd + støj
                     }
                 `,
                 fragmentShader: `
-                    varying vec3 vColor;
+                    varying float vIntensity;
                     void main() {
-                        float r = length(gl_PointCoord - vec2(0.5, 0.5));
-                        if (r > 0.5) discard;
-                        gl_FragColor = vec4(vColor, 1.0);
+                        gl_FragColor = vec4(vec3(vIntensity), 1.0);
                     }
                 `,
                 transparent: true,
@@ -81,40 +96,29 @@
 
             camera.position.z = 2;
 
-            // Tilføj fuldskærmsfunktionalitet
             renderer.domElement.addEventListener('click', toggleFullScreen);
-
-            // Initialiser audio
             initAudio();
-
             animate();
         }
 
         function animate() {
             requestAnimationFrame(animate);
+            time += 0.01;
+            particles.material.uniforms.time.value = time;
 
-            particles.material.uniforms.time.value += 0.01;
-
-            // Opdater partikler baseret på lyd
             if (analyser) {
                 const dataArray = new Uint8Array(analyser.frequencyBinCount);
                 analyser.getByteFrequencyData(dataArray);
                 
-                // Opdater tekstur med lyddata
                 if (!audioData) {
                     audioData = new THREE.DataTexture(dataArray, 256, 1, THREE.RedFormat);
                 }
                 audioData.needsUpdate = true;
                 particles.material.uniforms.audioData.value = audioData;
 
-                // Juster partikelfarver baseret på lydniveau
-                const colors = particles.geometry.attributes.color.array;
-                for (let i = 0; i < colors.length; i += 3) {
-                    const audioIndex = Math.floor(i / 3) % 256;
-                    const intensity = dataArray[audioIndex] / 255;
-                    colors[i] = colors[i + 1] = colors[i + 2] = intensity;
-                }
-                particles.geometry.attributes.color.needsUpdate = true;
+                // Juster bevægelsesintensitet baseret på gennemsnitlig lydstyrke
+                const avgAudio = dataArray.reduce((a, b) => a + b, 0) / dataArray.length / 255;
+                particles.material.uniforms.audioInfluence.value = 0.02 + avgAudio * 0.08;
             }
 
             renderer.render(scene, camera);
