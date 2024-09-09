@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Vandvæsen</title>
+    <title>Dynamisk 3D Vandvæsen</title>
     <style>
         body { margin: 0; overflow: hidden; }
         canvas { display: block; }
@@ -12,8 +12,10 @@
 <body>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
-        let scene, camera, renderer, creature;
+        let scene, camera, renderer, particles;
         let audioContext, analyser;
+        const particleCount = 10000;
+        let time = 0;
 
         function init() {
             scene = new THREE.Scene();
@@ -22,20 +24,65 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            // Opret et simpelt kugleformet væsen som en placeholder
-            const geometry = new THREE.SphereGeometry(1, 32, 32);
-            const material = new THREE.MeshPhongMaterial({
-                color: 0x00ffff,
-                transparent: true,
-                opacity: 0.7,
-            });
-            creature = new THREE.Mesh(geometry, material);
-            scene.add(creature);
+            // Partikelsystem
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(particleCount * 3);
+            const colors = new Float32Array(particleCount * 3);
 
-            // Tilføj lys
-            const light = new THREE.PointLight(0xffffff, 1, 100);
-            light.position.set(0, 0, 10);
-            scene.add(light);
+            for (let i = 0; i < particleCount * 3; i += 3) {
+                positions[i] = (Math.random() - 0.5) * 5;
+                positions[i + 1] = (Math.random() - 0.5) * 5;
+                positions[i + 2] = (Math.random() - 0.5) * 5;
+
+                colors[i] = Math.random() * 0.5 + 0.5;
+                colors[i + 1] = Math.random() * 0.5 + 0.5;
+                colors[i + 2] = 1;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            const material = new THREE.ShaderMaterial({
+                uniforms: {
+                    time: { value: 0 },
+                    audioLevel: { value: 0 }
+                },
+                vertexShader: `
+                    uniform float time;
+                    uniform float audioLevel;
+                    attribute vec3 color;
+                    varying vec3 vColor;
+                    
+                    float noise(vec3 p) {
+                        return fract(sin(dot(p, vec3(12.9898, 78.233, 45.5432))) * 43758.5453);
+                    }
+
+                    void main() {
+                        vColor = color;
+                        vec3 newPosition = position;
+                        
+                        float n = noise(newPosition + time * 0.1);
+                        newPosition += sin(time * 2.0 + n * 10.0) * 0.1 * (1.0 + audioLevel);
+                        
+                        vec4 mvPosition = modelViewMatrix * vec4(newPosition, 1.0);
+                        gl_PointSize = 3.0 * (1.0 / -mvPosition.z) * (1.0 + audioLevel * 2.0);
+                        gl_Position = projectionMatrix * mvPosition;
+                    }
+                `,
+                fragmentShader: `
+                    varying vec3 vColor;
+                    void main() {
+                        float r = length(gl_PointCoord - vec2(0.5, 0.5));
+                        if (r > 0.5) discard;
+                        gl_FragColor = vec4(vColor, 1.0 - r * 2.0);
+                    }
+                `,
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
 
             camera.position.z = 5;
 
@@ -51,15 +98,21 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            // Opdater væsnet baseret på lyd
+            time += 0.01;
+            particles.material.uniforms.time.value = time;
+
+            // Opdater partikler baseret på lyd
             if (analyser) {
                 const dataArray = new Uint8Array(analyser.frequencyBinCount);
                 analyser.getByteFrequencyData(dataArray);
                 const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+                const normalizedAudio = average / 256;
                 
-                // Skaler væsnet baseret på lydstyrke
-                const scale = 1 + average / 256;
-                creature.scale.set(scale, scale, scale);
+                particles.material.uniforms.audioLevel.value = normalizedAudio;
+
+                // Rotér partikelsystemet baseret på lydniveau
+                particles.rotation.y += 0.001 + normalizedAudio * 0.01;
+                particles.rotation.x += 0.0005 + normalizedAudio * 0.005;
             }
 
             renderer.render(scene, camera);
