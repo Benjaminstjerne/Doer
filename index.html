@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kaotisk TV-sne med Lydreaktion</title>
+    <title>Kaotisk TV-sne med Tydelig Lydreaktion</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: black; }
         canvas { display: block; }
@@ -16,6 +16,7 @@
         let audioContext, analyser;
         const particleCount = 200000;
         let audioData, time = 0;
+        let avgAudioLevel = 0;
 
         function init() {
             scene = new THREE.Scene();
@@ -42,18 +43,19 @@
                 uniforms: {
                     audioData: { value: null },
                     time: { value: 0 },
-                    baseMovement: { value: 0.005 }, // Basis bevægelse uden lyd
-                    audioInfluence: { value: 0.02 }  // Ekstra bevægelse med lyd
+                    avgAudioLevel: { value: 0 },
+                    baseMovement: { value: 0.003 },
+                    audioInfluence: { value: 0.02 }
                 },
                 vertexShader: `
                     uniform float time;
                     uniform sampler2D audioData;
+                    uniform float avgAudioLevel;
                     uniform float baseMovement;
                     uniform float audioInfluence;
                     attribute float randomness;
-                    varying float vIntensity;
+                    varying vec3 vColor;
 
-                    // Simpel støjfunktion
                     float noise(vec3 p) {
                         return fract(sin(dot(p, vec3(12.9898, 78.233, 45.5432))) * 43758.5453);
                     }
@@ -61,30 +63,40 @@
                     void main() {
                         float audioValue = texture2D(audioData, vec2(abs(position.x) * 0.25, 0.5)).r;
                         
-                        // Basis kaotisk bevægelse
                         vec3 newPosition = position;
                         float noiseValue = noise(position * 2.0 + time);
+                        
+                        // Base movement
                         newPosition += vec3(
-                            sin(time * (5.0 + randomness * 5.0) + position.x * 10.0),
-                            cos(time * (3.0 + randomness * 3.0) + position.y * 8.0),
-                            sin(time * (4.0 + randomness * 4.0) + position.z * 9.0)
-                        ) * (baseMovement + audioValue * audioInfluence);
+                            sin(time * (3.0 + randomness * 2.0) + position.x * 5.0),
+                            cos(time * (2.0 + randomness * 2.0) + position.y * 4.0),
+                            sin(time * (2.5 + randomness * 2.0) + position.z * 4.5)
+                        ) * baseMovement;
+                        
+                        // Audio-reactive movement
+                        newPosition += vec3(
+                            sin(audioValue * 10.0 + time * 5.0) * audioInfluence,
+                            cos(audioValue * 8.0 + time * 4.0) * audioInfluence,
+                            sin(audioValue * 9.0 + time * 4.5) * audioInfluence
+                        ) * avgAudioLevel * 2.0;  // Amplify the effect
 
-                        // Wrap-around effekt
+                        // Wrap-around effect
                         newPosition = fract(newPosition + 0.5) - 0.5;
-                        newPosition *= 4.0;  // Skaler tilbage til original størrelse
+                        newPosition *= 4.0;
 
                         vec4 mvPosition = modelViewMatrix * vec4(newPosition, 1.0);
-                        gl_PointSize = 1.5 * (1.0 + audioValue * 2.0 + noiseValue);
+                        gl_PointSize = 1.5 * (1.0 + audioValue * 3.0 + noiseValue);
                         gl_Position = projectionMatrix * mvPosition;
 
-                        vIntensity = 0.3 + audioValue * 0.7 + noiseValue * 0.3;  // Basis intensitet + lyd + støj
+                        // Color based on audio level
+                        float intensity = 0.3 + audioValue * 0.7 + noiseValue * 0.2;
+                        vColor = mix(vec3(intensity), vec3(1.0, 0.5, 0.0), avgAudioLevel);  // Transition to orange for high audio levels
                     }
                 `,
                 fragmentShader: `
-                    varying float vIntensity;
+                    varying vec3 vColor;
                     void main() {
-                        gl_FragColor = vec4(vec3(vIntensity), 1.0);
+                        gl_FragColor = vec4(vColor, 1.0);
                     }
                 `,
                 transparent: true,
@@ -116,9 +128,12 @@
                 audioData.needsUpdate = true;
                 particles.material.uniforms.audioData.value = audioData;
 
-                // Juster bevægelsesintensitet baseret på gennemsnitlig lydstyrke
-                const avgAudio = dataArray.reduce((a, b) => a + b, 0) / dataArray.length / 255;
-                particles.material.uniforms.audioInfluence.value = 0.02 + avgAudio * 0.08;
+                // Smooth out the average audio level for more stable visual changes
+                const instantAvg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length / 255;
+                avgAudioLevel = avgAudioLevel * 0.95 + instantAvg * 0.05;
+                particles.material.uniforms.avgAudioLevel.value = avgAudioLevel;
+
+                particles.material.uniforms.audioInfluence.value = 0.02 + avgAudioLevel * 0.1;
             }
 
             renderer.render(scene, camera);
