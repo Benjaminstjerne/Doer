@@ -2,7 +2,7 @@
 <html lang="da">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Dynamisk S/H TV-sne</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: black; }
@@ -17,11 +17,24 @@
         const particleCount = 1000000;
         let audioData, time = 0;
         let lowFreq = 0, midFreq = 0, highFreq = 0;
+        let wakeLock = null;
+
+        async function requestWakeLock() {
+            try {
+                wakeLock = await navigator.wakeLock.request('screen');
+                console.log('Wake Lock is active');
+                wakeLock.addEventListener('release', () => {
+                    console.log('Wake Lock has been released');
+                });
+            } catch (err) {
+                console.error(`${err.name}, ${err.message}`);
+            }
+        }
 
         function init() {
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            renderer = new THREE.WebGLRenderer();
+            renderer = new THREE.WebGLRenderer({ powerPreference: "high-performance" });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
@@ -62,15 +75,12 @@
                     void main() {
                         vec3 newPosition = position;
                         
-                        // Lavfrekvens skaber store bølger
                         float lowWave = sin(newPosition.x * 0.5 + newPosition.y * 0.3 + time) * lowFreq * 0.5;
                         newPosition += vec3(0, 0, lowWave);
 
-                        // Mellemfrekvens skaber mellemstore bølger
                         float midWave = sin(newPosition.x * 2.0 + newPosition.y * 1.5 + time * 2.0) * midFreq * 0.3;
                         newPosition += vec3(midWave * 0.3, midWave * 0.2, midWave * 0.1);
 
-                        // Højfrekvens skaber små, hurtige bevægelser
                         vec3 highNoise = vec3(
                             noise(newPosition * 10.0 + time * 5.0),
                             noise(newPosition * 11.0 + time * 5.0),
@@ -78,7 +88,6 @@
                         ) * highFreq * 0.1;
                         newPosition += highNoise;
 
-                        // Ekstra bevægelse baseret på samlet lydniveau
                         float totalAudio = lowFreq + midFreq + highFreq;
                         newPosition += vec3(
                             sin(time * 10.0 + randomness * 1000.0) * totalAudio * 0.2,
@@ -90,7 +99,6 @@
                         gl_PointSize = 1.0 + highFreq * 2.0;
                         gl_Position = projectionMatrix * mvPosition;
 
-                        // Beregn intensitet baseret på position og lyd
                         vIntensity = 0.3 + 0.7 * (
                             sin(newPosition.x * 2.0 + lowFreq * 5.0) * 0.3 +
                             sin(newPosition.y * 3.0 + midFreq * 10.0) * 0.3 +
@@ -148,20 +156,27 @@
             renderer.render(scene, camera);
         }
 
-        function toggleFullScreen() {
+        async function toggleFullScreen() {
             if (!document.fullscreenElement) {
-                document.documentElement.requestFullscreen();
+                await document.documentElement.requestFullscreen();
+                await requestWakeLock();
+                screen.orientation.lock("landscape");
             } else {
                 if (document.exitFullscreen) {
                     document.exitFullscreen();
                 }
+                if (wakeLock) wakeLock.release();
+                screen.orientation.unlock();
             }
         }
 
         function initAudio() {
+            // Tjek om webkitAudioContext er tilgængelig (for Safari)
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioContext = new AudioContext();
+
             navigator.mediaDevices.getUserMedia({ audio: true })
                 .then(stream => {
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     analyser = audioContext.createAnalyser();
                     analyser.fftSize = 1024;
                     const source = audioContext.createMediaStreamSource(stream);
@@ -170,13 +185,24 @@
                 .catch(err => console.error('Fejl ved adgang til mikrofon:', err));
         }
 
+        function handleVisibilityChange() {
+            if (document.hidden) {
+                if (wakeLock) wakeLock.release();
+            } else {
+                requestWakeLock();
+            }
+        }
+
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        init();
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+
+        // Start animationen når siden er fuldt indlæst
+        window.addEventListener('load', init);
     </script>
 </body>
 </html>
