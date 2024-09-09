@@ -2,8 +2,8 @@
 <html lang="da">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Lydreaktiv S/H TV-sne</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamisk S/H TV-sne</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: black; }
         canvas { display: block; }
@@ -13,27 +13,15 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
         let scene, camera, renderer, particles;
-        let audioContext, analyser, dataArray;
+        let audioContext, analyser;
         const particleCount = 1000000;
-        let time = 0;
+        let audioData, time = 0;
         let lowFreq = 0, midFreq = 0, highFreq = 0;
-        let wakeLock = null;
-
-        async function requestWakeLock() {
-            if ('wakeLock' in navigator) {
-                try {
-                    wakeLock = await navigator.wakeLock.request('screen');
-                    console.log('Wake Lock is active');
-                } catch (err) {
-                    console.error(`${err.name}, ${err.message}`);
-                }
-            }
-        }
 
         function init() {
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            renderer = new THREE.WebGLRenderer({ powerPreference: "high-performance" });
+            renderer = new THREE.WebGLRenderer();
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
@@ -56,7 +44,8 @@
                     time: { value: 0 },
                     lowFreq: { value: 0 },
                     midFreq: { value: 0 },
-                    highFreq: { value: 0 }
+                    highFreq: { value: 0 },
+                    audioData: { value: null }
                 },
                 vertexShader: `
                     uniform float time;
@@ -73,30 +62,35 @@
                     void main() {
                         vec3 newPosition = position;
                         
-                        float lowWave = sin(newPosition.x * 0.5 + newPosition.y * 0.3 + time) * lowFreq * 1.5;
+                        // Lavfrekvens skaber store bølger
+                        float lowWave = sin(newPosition.x * 0.5 + newPosition.y * 0.3 + time) * lowFreq * 0.5;
                         newPosition += vec3(0, 0, lowWave);
 
-                        float midWave = sin(newPosition.x * 2.0 + newPosition.y * 1.5 + time * 2.0) * midFreq * 1.0;
+                        // Mellemfrekvens skaber mellemstore bølger
+                        float midWave = sin(newPosition.x * 2.0 + newPosition.y * 1.5 + time * 2.0) * midFreq * 0.3;
                         newPosition += vec3(midWave * 0.3, midWave * 0.2, midWave * 0.1);
 
+                        // Højfrekvens skaber små, hurtige bevægelser
                         vec3 highNoise = vec3(
                             noise(newPosition * 10.0 + time * 5.0),
                             noise(newPosition * 11.0 + time * 5.0),
                             noise(newPosition * 12.0 + time * 5.0)
-                        ) * highFreq * 0.5;
+                        ) * highFreq * 0.1;
                         newPosition += highNoise;
 
+                        // Ekstra bevægelse baseret på samlet lydniveau
                         float totalAudio = lowFreq + midFreq + highFreq;
                         newPosition += vec3(
-                            sin(time * 10.0 + randomness * 1000.0) * totalAudio * 0.5,
-                            cos(time * 11.0 + randomness * 1000.0) * totalAudio * 0.5,
-                            sin(time * 12.0 + randomness * 1000.0) * totalAudio * 0.5
+                            sin(time * 10.0 + randomness * 1000.0) * totalAudio * 0.2,
+                            cos(time * 11.0 + randomness * 1000.0) * totalAudio * 0.2,
+                            sin(time * 12.0 + randomness * 1000.0) * totalAudio * 0.2
                         );
 
                         vec4 mvPosition = modelViewMatrix * vec4(newPosition, 1.0);
-                        gl_PointSize = 1.0 + highFreq * 3.0;
+                        gl_PointSize = 1.0 + highFreq * 2.0;
                         gl_Position = projectionMatrix * mvPosition;
 
+                        // Beregn intensitet baseret på position og lyd
                         vIntensity = 0.3 + 0.7 * (
                             sin(newPosition.x * 2.0 + lowFreq * 5.0) * 0.3 +
                             sin(newPosition.y * 3.0 + midFreq * 10.0) * 0.3 +
@@ -129,9 +123,16 @@
             time += 0.01;
             particles.material.uniforms.time.value = time;
 
-            if (analyser && dataArray) {
+            if (analyser) {
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
                 analyser.getByteFrequencyData(dataArray);
                 
+                if (!audioData) {
+                    audioData = new THREE.DataTexture(dataArray, 256, 1, THREE.RedFormat);
+                }
+                audioData.needsUpdate = true;
+                particles.material.uniforms.audioData.value = audioData;
+
                 const lowEnd = Math.floor(dataArray.length * 0.1);
                 const midEnd = Math.floor(dataArray.length * 0.5);
 
@@ -147,45 +148,26 @@
             renderer.render(scene, camera);
         }
 
-        async function toggleFullScreen() {
+        function toggleFullScreen() {
             if (!document.fullscreenElement) {
-                await document.documentElement.requestFullscreen();
-                await requestWakeLock();
-                if (screen.orientation && screen.orientation.lock) {
-                    screen.orientation.lock("landscape").catch(e => console.error(e));
-                }
+                document.documentElement.requestFullscreen();
             } else {
                 if (document.exitFullscreen) {
                     document.exitFullscreen();
-                }
-                if (wakeLock) wakeLock.release();
-                if (screen.orientation && screen.orientation.unlock) {
-                    screen.orientation.unlock();
                 }
             }
         }
 
         function initAudio() {
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            audioContext = new AudioContext();
-
             navigator.mediaDevices.getUserMedia({ audio: true })
                 .then(stream => {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     analyser = audioContext.createAnalyser();
                     analyser.fftSize = 1024;
-                    dataArray = new Uint8Array(analyser.frequencyBinCount);
                     const source = audioContext.createMediaStreamSource(stream);
                     source.connect(analyser);
                 })
                 .catch(err => console.error('Fejl ved adgang til mikrofon:', err));
-        }
-
-        function handleVisibilityChange() {
-            if (document.hidden) {
-                if (wakeLock) wakeLock.release();
-            } else {
-                requestWakeLock();
-            }
         }
 
         window.addEventListener('resize', () => {
@@ -194,9 +176,7 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        document.addEventListener("visibilitychange", handleVisibilityChange);
-
-        window.addEventListener('load', init);
+        init();
     </script>
 </body>
 </html>
