@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>lyd</title>
+    <title>Lydreaktiv S/H TV-sne</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: black; }
         canvas { display: block; }
@@ -13,21 +13,20 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
         let scene, camera, renderer, particles;
-        let audioContext, analyser;
+        let audioContext, analyser, dataArray;
         const particleCount = 1000000;
-        let audioData, time = 0;
+        let time = 0;
         let lowFreq = 0, midFreq = 0, highFreq = 0;
         let wakeLock = null;
 
         async function requestWakeLock() {
-            try {
-                wakeLock = await navigator.wakeLock.request('screen');
-                console.log('Wake Lock is active');
-                wakeLock.addEventListener('release', () => {
-                    console.log('Wake Lock has been released');
-                });
-            } catch (err) {
-                console.error(`${err.name}, ${err.message}`);
+            if ('wakeLock' in navigator) {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('Wake Lock is active');
+                } catch (err) {
+                    console.error(`${err.name}, ${err.message}`);
+                }
             }
         }
 
@@ -57,8 +56,7 @@
                     time: { value: 0 },
                     lowFreq: { value: 0 },
                     midFreq: { value: 0 },
-                    highFreq: { value: 0 },
-                    audioData: { value: null }
+                    highFreq: { value: 0 }
                 },
                 vertexShader: `
                     uniform float time;
@@ -75,28 +73,28 @@
                     void main() {
                         vec3 newPosition = position;
                         
-                        float lowWave = sin(newPosition.x * 0.5 + newPosition.y * 0.3 + time) * lowFreq * 0.5;
+                        float lowWave = sin(newPosition.x * 0.5 + newPosition.y * 0.3 + time) * lowFreq * 1.5;
                         newPosition += vec3(0, 0, lowWave);
 
-                        float midWave = sin(newPosition.x * 2.0 + newPosition.y * 1.5 + time * 2.0) * midFreq * 0.3;
+                        float midWave = sin(newPosition.x * 2.0 + newPosition.y * 1.5 + time * 2.0) * midFreq * 1.0;
                         newPosition += vec3(midWave * 0.3, midWave * 0.2, midWave * 0.1);
 
                         vec3 highNoise = vec3(
                             noise(newPosition * 10.0 + time * 5.0),
                             noise(newPosition * 11.0 + time * 5.0),
                             noise(newPosition * 12.0 + time * 5.0)
-                        ) * highFreq * 0.1;
+                        ) * highFreq * 0.5;
                         newPosition += highNoise;
 
                         float totalAudio = lowFreq + midFreq + highFreq;
                         newPosition += vec3(
-                            sin(time * 10.0 + randomness * 1000.0) * totalAudio * 0.2,
-                            cos(time * 11.0 + randomness * 1000.0) * totalAudio * 0.2,
-                            sin(time * 12.0 + randomness * 1000.0) * totalAudio * 0.2
+                            sin(time * 10.0 + randomness * 1000.0) * totalAudio * 0.5,
+                            cos(time * 11.0 + randomness * 1000.0) * totalAudio * 0.5,
+                            sin(time * 12.0 + randomness * 1000.0) * totalAudio * 0.5
                         );
 
                         vec4 mvPosition = modelViewMatrix * vec4(newPosition, 1.0);
-                        gl_PointSize = 1.0 + highFreq * 2.0;
+                        gl_PointSize = 1.0 + highFreq * 3.0;
                         gl_Position = projectionMatrix * mvPosition;
 
                         vIntensity = 0.3 + 0.7 * (
@@ -131,16 +129,9 @@
             time += 0.01;
             particles.material.uniforms.time.value = time;
 
-            if (analyser) {
-                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            if (analyser && dataArray) {
                 analyser.getByteFrequencyData(dataArray);
                 
-                if (!audioData) {
-                    audioData = new THREE.DataTexture(dataArray, 256, 1, THREE.RedFormat);
-                }
-                audioData.needsUpdate = true;
-                particles.material.uniforms.audioData.value = audioData;
-
                 const lowEnd = Math.floor(dataArray.length * 0.1);
                 const midEnd = Math.floor(dataArray.length * 0.5);
 
@@ -160,18 +151,21 @@
             if (!document.fullscreenElement) {
                 await document.documentElement.requestFullscreen();
                 await requestWakeLock();
-                screen.orientation.lock("landscape");
+                if (screen.orientation && screen.orientation.lock) {
+                    screen.orientation.lock("landscape").catch(e => console.error(e));
+                }
             } else {
                 if (document.exitFullscreen) {
                     document.exitFullscreen();
                 }
                 if (wakeLock) wakeLock.release();
-                screen.orientation.unlock();
+                if (screen.orientation && screen.orientation.unlock) {
+                    screen.orientation.unlock();
+                }
             }
         }
 
         function initAudio() {
-            // Tjek om webkitAudioContext er tilgængelig (for Safari)
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             audioContext = new AudioContext();
 
@@ -179,6 +173,7 @@
                 .then(stream => {
                     analyser = audioContext.createAnalyser();
                     analyser.fftSize = 1024;
+                    dataArray = new Uint8Array(analyser.frequencyBinCount);
                     const source = audioContext.createMediaStreamSource(stream);
                     source.connect(analyser);
                 })
@@ -201,7 +196,6 @@
 
         document.addEventListener("visibilitychange", handleVisibilityChange);
 
-        // Start animationen når siden er fuldt indlæst
         window.addEventListener('load', init);
     </script>
 </body>
