@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dynamisk TV-sne</title>
+    <title>Dynamisk S/H TV-sne</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: black; }
         canvas { display: block; }
@@ -14,7 +14,7 @@
     <script>
         let scene, camera, renderer, particles;
         let audioContext, analyser;
-        const particleCount = 500000;
+        const particleCount = 1000000;
         let audioData, time = 0;
         let lowFreq = 0, midFreq = 0, highFreq = 0;
 
@@ -53,9 +53,8 @@
                     uniform float midFreq;
                     uniform float highFreq;
                     attribute float randomness;
-                    varying vec3 vColor;
+                    varying float vIntensity;
 
-                    // Simpel støjfunktion
                     float noise(vec3 p) {
                         return fract(sin(dot(p, vec3(12.9898, 78.233, 45.5432))) * 43758.5453);
                     }
@@ -63,47 +62,46 @@
                     void main() {
                         vec3 newPosition = position;
                         
-                        // Lavfrekvens påvirker overordnet bevægelse
-                        newPosition += vec3(
-                            sin(time + position.x * 2.0) * lowFreq * 0.3,
-                            cos(time + position.y * 2.0) * lowFreq * 0.3,
-                            sin(time + position.z * 2.0) * lowFreq * 0.3
-                        );
+                        // Lavfrekvens skaber store bølger
+                        float lowWave = sin(newPosition.x * 0.5 + newPosition.y * 0.3 + time) * lowFreq * 0.5;
+                        newPosition += vec3(0, 0, lowWave);
 
-                        // Mellemfrekvens skaber bølger
-                        float wave = sin(4.0 * position.x + 3.0 * position.y + 2.0 * position.z + time * 5.0) * midFreq * 0.2;
-                        newPosition += normal * wave;
+                        // Mellemfrekvens skaber mellemstore bølger
+                        float midWave = sin(newPosition.x * 2.0 + newPosition.y * 1.5 + time * 2.0) * midFreq * 0.3;
+                        newPosition += vec3(midWave * 0.3, midWave * 0.2, midWave * 0.1);
 
-                        // Højfrekvens tilføjer små, hurtige bevægelser
-                        newPosition += vec3(
-                            noise(position * 10.0 + time) * highFreq * 0.1,
-                            noise(position * 11.0 + time) * highFreq * 0.1,
-                            noise(position * 12.0 + time) * highFreq * 0.1
-                        );
+                        // Højfrekvens skaber små, hurtige bevægelser
+                        vec3 highNoise = vec3(
+                            noise(newPosition * 10.0 + time * 5.0),
+                            noise(newPosition * 11.0 + time * 5.0),
+                            noise(newPosition * 12.0 + time * 5.0)
+                        ) * highFreq * 0.1;
+                        newPosition += highNoise;
 
-                        // Tilføj lidt tilfældig bevægelse
+                        // Ekstra bevægelse baseret på samlet lydniveau
+                        float totalAudio = lowFreq + midFreq + highFreq;
                         newPosition += vec3(
-                            sin(time * (5.0 + randomness * 5.0)) * 0.02,
-                            cos(time * (6.0 + randomness * 5.0)) * 0.02,
-                            sin(time * (7.0 + randomness * 5.0)) * 0.02
+                            sin(time * 10.0 + randomness * 1000.0) * totalAudio * 0.2,
+                            cos(time * 11.0 + randomness * 1000.0) * totalAudio * 0.2,
+                            sin(time * 12.0 + randomness * 1000.0) * totalAudio * 0.2
                         );
 
                         vec4 mvPosition = modelViewMatrix * vec4(newPosition, 1.0);
-                        gl_PointSize = 1.5 * (1.0 + highFreq);
+                        gl_PointSize = 1.0 + highFreq * 2.0;
                         gl_Position = projectionMatrix * mvPosition;
 
-                        // Farve baseret på position og frekvenser
-                        vColor = vec3(
-                            0.5 + 0.5 * sin(newPosition.x * 2.0 + lowFreq),
-                            0.5 + 0.5 * sin(newPosition.y * 2.0 + midFreq),
-                            0.5 + 0.5 * sin(newPosition.z * 2.0 + highFreq)
+                        // Beregn intensitet baseret på position og lyd
+                        vIntensity = 0.3 + 0.7 * (
+                            sin(newPosition.x * 2.0 + lowFreq * 5.0) * 0.3 +
+                            sin(newPosition.y * 3.0 + midFreq * 10.0) * 0.3 +
+                            sin(newPosition.z * 4.0 + highFreq * 15.0) * 0.4
                         );
                     }
                 `,
                 fragmentShader: `
-                    varying vec3 vColor;
+                    varying float vIntensity;
                     void main() {
-                        gl_FragColor = vec4(vColor, 1.0);
+                        gl_FragColor = vec4(vec3(vIntensity), 1.0);
                     }
                 `,
                 transparent: true,
@@ -135,7 +133,6 @@
                 audioData.needsUpdate = true;
                 particles.material.uniforms.audioData.value = audioData;
 
-                // Opdel frekvensdata i lav, mellem og høj
                 const lowEnd = Math.floor(dataArray.length * 0.1);
                 const midEnd = Math.floor(dataArray.length * 0.5);
 
